@@ -90,6 +90,19 @@ class TestScriptPromptOptions(unittest.TestCase):
         self.assertIn("# Additional User Requirements:", prompt)
         self.assertIn("语气轻松，面向程序员", prompt)
 
+    def test_default_script_prompt_is_optimized_for_short_form_video(self):
+        prompt = llm.build_script_prompt(
+            video_subject="Como economizar dinheiro",
+            language="pt-BR",
+            paragraph_number=2,
+        )
+
+        self.assertIn("strong first sentence", prompt)
+        self.assertIn("short, conversational sentences", prompt)
+        self.assertIn("concrete details, actions, examples, and visual language", prompt)
+        self.assertIn("avoid generic engagement bait", prompt)
+        self.assertIn("- language: pt-BR", prompt)
+
     def test_custom_system_prompt_keeps_runtime_context(self):
         """
         自定义 system prompt 会替换默认脚本规则，但视频主题、语言、段落数
@@ -213,6 +226,26 @@ class TestScriptPromptOptions(unittest.TestCase):
         self.assertEqual(result, ["opening city", "middle office", "final sunset"])
         self.assertIn("chronological stock-video search terms", captured["prompt"])
         self.assertIn("same order as the script narration", captured["prompt"])
+
+    def test_generate_terms_deduplicates_and_cleans_search_terms(self):
+        with patch.object(
+            llm,
+            "_generate_response",
+            return_value=(
+                '["  coffee shop  ", "Coffee Shop", "", '
+                '"barista hands", "coffee steam", "extra term"]'
+            ),
+        ):
+            result = llm.generate_terms(
+                video_subject="coffee",
+                video_script="A barista prepares a fresh cup of coffee.",
+                amount=3,
+            )
+
+        self.assertEqual(
+            result,
+            ["coffee shop", "barista hands", "coffee steam"],
+        )
 
     def test_generate_terms_returns_empty_list_on_provider_error(self):
         """
