@@ -33,20 +33,24 @@ _SENSITIVE_QUERY_RE = re.compile(
 )
 
 DEFAULT_SCRIPT_SYSTEM_PROMPT = """
-# Role: Video Script Generator
+# Role: Short-Form Video Script Generator
 
-## Goals:
-Generate a script for a video, depending on the subject of the video.
+## Goal:
+Write a natural, engaging spoken script that works well for short-form video.
 
-## Constrains:
-1. the script is to be returned as a string with the specified number of paragraphs.
-2. do not under any circumstance reference this prompt in your response.
-3. get straight to the point, don't start with unnecessary things like, "welcome to this video".
-4. you must not include any type of markdown or formatting in the script, never use a title.
-5. only return the raw content of the script.
-6. do not include "voiceover", "narrator" or similar indicators of what should be spoken at the beginning of each paragraph or line.
-7. you must not mention the prompt, or anything about the script itself. also, never talk about the amount of paragraphs or lines. just write the script.
-8. respond in the same language as the video subject.
+## Constraints:
+1. return exactly the requested number of paragraphs as plain text.
+2. start with a strong first sentence that creates immediate curiosity, tension, surprise, or a clear promise of value; never use greetings or generic introductions.
+3. get to the subject immediately and keep every sentence useful to the viewer.
+4. prefer short, conversational sentences that are easy to narrate and subtitle.
+5. use concrete details, actions, examples, and visual language whenever possible so the script can be matched to relevant footage.
+6. make each paragraph advance the idea instead of repeating the same point in different words.
+7. do not invent precise statistics, quotations, studies, or named sources unless they are provided in the subject or additional requirements.
+8. end with a concise payoff, conclusion, or memorable takeaway; avoid generic engagement bait such as asking viewers to like, follow, or subscribe unless explicitly requested.
+9. do not include markdown, titles, headings, bullet points, stage directions, or labels such as "voiceover" or "narrator".
+10. do not reference this prompt, the writing process, paragraph counts, or the fact that this is a script.
+11. only return the words that should be spoken.
+12. respond in the same language as the video subject unless a language is explicitly requested.
 """.strip()
 
 # Claude Code CLI 默认使用编码 agent 的系统提示词，其中大量约束与文案写作
@@ -829,6 +833,34 @@ def _strip_code_fence(text: str) -> str:
     return t.strip()
 
 
+def _normalize_search_terms(search_terms, amount: int) -> List[str]:
+    """Trim, deduplicate, and cap LLM-generated material search terms.
+
+    Models occasionally return repeated terms with different casing or whitespace.
+    Removing those duplicates before material lookup improves scene variety and avoids
+    wasting stock-provider requests while preserving the original narrative order.
+    """
+    normalized = []
+    seen = set()
+    limit = max(int(amount), 0)
+
+    for term in search_terms or []:
+        if not isinstance(term, str):
+            continue
+        cleaned = re.sub(r"\s+", " ", term).strip()
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(cleaned)
+        if limit and len(normalized) >= limit:
+            break
+
+    return normalized
+
+
 def generate_terms(
     video_subject: str,
     video_script: str,
@@ -843,7 +875,7 @@ def generate_terms(
             "the order of topics in the video script."
         )
         ordering_rule = (
-            "6. keep the terms in the same order as the script narration; "
+            "7. keep the terms in the same order as the script narration; "
             "earlier terms must describe earlier visual moments."
         )
         # 有序关键词模式下，示例数量要和 amount 保持一致，避免模型被固定
@@ -871,12 +903,13 @@ def generate_terms(
 ## Goals:
 {goal}
 
-## Constrains:
-1. the search terms are to be returned as a json-array of strings.
-2. each search term should consist of 1-3 words, always add the main subject of the video.
-3. you must only return the json-array of strings. you must not return anything else. you must not return the script.
-4. the search terms must be related to the subject of the video.
-5. reply with english search terms only.
+## Constraints:
+1. return a JSON array of strings containing only the search terms.
+2. write each term as a concrete, visually searchable English phrase, usually 2-5 words.
+3. prefer visible people, actions, objects, places, environments, and camera-friendly scenes; avoid abstract concepts that cannot be filmed directly.
+4. make every term meaningfully different so the material search does not fetch near-duplicate scenes.
+5. include the main subject when it improves search relevance, but do not mechanically repeat it in every term.
+6. return English search terms only and do not return explanations or any part of the script.
 {ordering_rule}
 
 ## Output Example:
@@ -915,6 +948,7 @@ Please note that you must use English for generating video search terms; Chinese
             ):
                 logger.error("response is not a list of strings.")
                 continue
+            search_terms = _normalize_search_terms(search_terms, amount)
 
         except Exception as e:
             logger.warning(f"failed to generate video terms: {str(e)}")
@@ -922,7 +956,9 @@ Please note that you must use English for generating video search terms; Chinese
                 match = re.search(r"\[.*]", response, re.DOTALL)
                 if match:
                     try:
-                        search_terms = json.loads(match.group())
+                        search_terms = _normalize_search_terms(
+                            json.loads(match.group()), amount
+                        )
                     except Exception as e:
                         # 这里保留重试流程，但必须记录 LLM 返回的非标准 JSON，
                         # 否则后续排查搜索词为空时无法定位
